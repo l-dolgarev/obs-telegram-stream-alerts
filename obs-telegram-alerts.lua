@@ -31,8 +31,7 @@ local TG_CHAT_STATUS = {
 local tg_config = {
     bot_token = "",
     chat_id = "",
-    status = TG_CONFIG_STATUS.NOT_CONFIGURED,
-    start_msg_id = nil
+    status = TG_CONFIG_STATUS.NOT_CONFIGURED
 }
 
 local config = {
@@ -98,11 +97,12 @@ function build_curl_command(url, method, data)
     local platform = detect_platform()
     local is_windows = platform == "windows"
     local q = is_windows and '"' or "'"
-    local cmd_prefix = is_windows and "cmd /c " or ""
-    local cmd = cmd_prefix .. "curl -s --max-time 30"
+    local cmd = "curl -s --max-time 30"
+    
     if method == "POST" then
-        cmd = cmd .. " -X POST -H " .. q .. "Content-Type: application/json" .. q .. " -d " .. data
+        cmd = cmd .. " -X POST -H " .. q .. "Content-Type: application/x-www-form-urlencoded" .. q .. " -d " .. data
     end
+    
     cmd = cmd .. " -w " .. q .. "\\n%{http_code}" .. q .. " " .. q .. url .. q
     
     return cmd
@@ -128,14 +128,14 @@ function http_get(url)
 end
 
 function http_post(url, body_table)
-    local json_parts = {}
+    local form_parts = {}
     for key, value in pairs(body_table) do
-        table.insert(json_parts, '"' .. key .. '":"' .. tostring(value) .. '"')
+        table.insert(form_parts, key .. "=" .. url_encode(value))
     end
-    local json_body = "{" .. table.concat(json_parts, ",") .. "}"
-    local escaped_json = escape_shell_json(json_body)
-    local cmd = build_curl_command(url, "POST", escaped_json)
+    local form_data = table.concat(form_parts, "&")
+    local escaped_data = escape_shell_json(form_data)
     
+    local cmd = build_curl_command(url, "POST", escaped_data)
     local handle = io.popen(cmd)
     if not handle then
         obs.script_log(obs.LOG_ERROR, "HTTP POST failed: Unable to execute curl (check if curl is installed)")
@@ -227,6 +227,51 @@ function tg_validate_chat_id()
     return true
 end
 
+function tg_send_msg(text)
+    if tg_config.bot_token == "" or tg_config.chat_id == "" then
+        obs.script_log(obs.LOG_ERROR, "Telegram credentials not configured")
+        return false, nil
+    end
+    
+    local url = TELEGRAM_API_BASE .. tg_config.bot_token .. "/sendMessage"
+    local body = {
+        chat_id = tg_config.chat_id,
+        text = text,
+        parse_mode = "HTML"
+    }
+    
+    local response = http_post(url, body)
+    
+    if response.status == 200 then
+        local msg_id = response.body:match('"message_id":(%d+)')
+        return true, msg_id
+    end
+    
+    if response.status == 401 then
+        obs.script_log(obs.LOG_ERROR, "Telegram API error (401): Unauthorized")
+        return false, nil
+    end
+    
+    if response.status == 400 then
+        local description = response.body:match('"description":"([^"]+)"') or "Bad Request"
+        obs.script_log(obs.LOG_ERROR, "Telegram API error (400): " .. description)
+        return false, nil
+    end
+    
+    if response.status == 429 then
+        obs.script_log(obs.LOG_ERROR, "Telegram API error (429): Rate limit exceeded")
+        return false, nil
+    end
+    
+    if response.status == 0 then
+        obs.script_log(obs.LOG_ERROR, "Failed to send Telegram message: network timeout or DNS failure")
+        return false, nil
+    end
+    
+    obs.script_log(obs.LOG_ERROR, "Telegram API error (" .. response.status .. "): Unknown error")
+    return false, nil
+end
+
 function script_description()
     return [[<b>OBS Telegram Stream Alerts</b> v]] .. VERSION .. [[<br>
 <br>
@@ -236,11 +281,19 @@ Send Telegram notifications when your stream starts and stops.<br>
 end
 
 function stream_start()
-    obs.script_log(obs.LOG_ERROR, "Streaming started")
+    if tg_config.bot_token == "" or tg_config.chat_id == "" then
+        return
+    end
+    
+    tg_send_msg(config.start_template)
 end
 
 function stream_stop()
-    obs.script_log(obs.LOG_ERROR, "Streaming stopped")
+    if tg_config.bot_token == "" or tg_config.chat_id == "" then
+        return
+    end
+    
+    tg_send_msg(config.stop_template)
 end
 
 function test_stream_start(props, p)
