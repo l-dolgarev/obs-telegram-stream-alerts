@@ -68,8 +68,18 @@ function script_defaults(settings)
     obs.obs_data_set_default_string(settings, "twitch_channel_name", "")
 end
 
+function on_event(event)
+    if event == obs.OBS_FRONTEND_EVENT_STREAMING_STARTED then
+        obs.script_log(obs.LOG_ERROR, "Streaming started")
+    elseif event == obs.OBS_FRONTEND_EVENT_STREAMING_STOPPED then
+        obs.script_log(obs.LOG_ERROR, "Streaming stopped")
+    end
+end
+
 function script_load(settings)
+    obs.obs_frontend_add_event_callback(on_event)
 end
 
 function script_unload()
+    obs.obs_frontend_remove_event_callback(on_event)
 end
