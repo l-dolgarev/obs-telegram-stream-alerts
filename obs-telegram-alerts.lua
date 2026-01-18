@@ -17,6 +17,7 @@ local TG_CONFIG_STATUS = {
 local EMOJI = {
     SUCCESS = "✅",
     ERROR = "❌",
+    WARNING = "⚠️",
     START = "🔴",
     STOP = "⚫"
 }
@@ -25,14 +26,16 @@ local TG_BOT_STATUS = {
     CONNECTED = EMOJI.SUCCESS .. " Bot Connected: @",
     INVALID_TOKEN = EMOJI.ERROR .. " Invalid Bot Token",
     INVALID_RESPONSE = EMOJI.ERROR .. " Invalid Response",
-    NETWORK_ERROR = EMOJI.ERROR .. " Network Error"
+    NETWORK_ERROR = EMOJI.ERROR .. " Network Error",
+    RATE_LIMITED = EMOJI.WARNING .. " Rate Limited"
 }
 
 local TG_CHAT_STATUS = {
     FOUND = " | " .. EMOJI.SUCCESS .. " Chat: ",
     DM = " | " .. EMOJI.SUCCESS .. " Chat: Direct Message",
     NOT_FOUND = " | " .. EMOJI.ERROR .. " Chat Not Found",
-    ERROR = " | " .. EMOJI.ERROR .. " Chat Error"
+    ERROR = " | " .. EMOJI.ERROR .. " Chat Error",
+    RATE_LIMITED = " | " .. EMOJI.WARNING .. " Rate Limited"
 }
 
 local TG_DEFAULTS = {
@@ -65,7 +68,8 @@ local config = {
     enable_stop = DEFAULTS.enable_stop,
     start_msg = DEFAULTS.start_msg,
     stop_msg = DEFAULTS.stop_msg,
-    enable_delete_start_msg = DEFAULTS.enable_delete_start_msg
+    enable_delete_start_msg = DEFAULTS.enable_delete_start_msg,
+    start_msg_id = nil
 }
 
 local twitch_config = {
@@ -194,7 +198,7 @@ function tg_validate_bot_token()
     end
     
     if response.status == 429 then
-        tg_config.status = "⚠️ Rate Limited"
+        tg_config.status = TG_BOT_STATUS.RATE_LIMITED
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Rate limited - wait before retrying")
         return false
     end
@@ -231,7 +235,7 @@ function tg_validate_chat_id()
     end
     
     if response.status == 429 then
-        tg_config.status = tg_config.status .. " | ⚠️ Rate Limited"
+        tg_config.status = tg_config.status .. TG_CHAT_STATUS.RATE_LIMITED
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Rate limited - wait before retrying")
         return false
     end
@@ -297,6 +301,33 @@ function tg_send_msg(text)
     return false, nil
 end
 
+function tg_delete_msg(message_id)
+    if not message_id or message_id == "" then
+        return false
+    end
+    
+    local url = TELEGRAM_API_BASE .. tg_config.bot_token .. "/deleteMessage"
+    local body = {
+        chat_id = tg_config.chat_id,
+        message_id = message_id
+    }
+    
+    local response = http_post(url, body)
+    
+    if response.status == 200 then
+        return true
+    end
+    
+    if response.status == 429 then
+        obs.script_log(obs.LOG_ERROR, "Failed to delete message: Rate limit exceeded")
+        return false
+    end
+    
+    local description = response.body:match('"description":"([^"]+)"') or "Unknown error"
+    obs.script_log(obs.LOG_ERROR, "Failed to delete message: " .. description)
+    return false
+end
+
 function script_description()
     return [[<b>OBS Telegram Stream Alerts</b> v]] .. VERSION .. [[<br>
 <br>
@@ -310,7 +341,11 @@ function notify_stream_start()
         return
     end
     
-    tg_send_msg(config.start_msg)
+    local success, message_id = tg_send_msg(config.start_msg)
+    
+    if success and message_id then
+        config.start_msg_id = message_id
+    end
 end
 
 function notify_stream_stop()
@@ -319,6 +354,11 @@ function notify_stream_stop()
     end
 
     tg_send_msg(config.stop_msg)
+    
+    if config.enable_delete_start_msg and config.start_msg_id and config.start_msg_id ~= "" then
+        tg_delete_msg(config.start_msg_id)
+        config.start_msg_id = nil
+    end
 end
 
 function test_stream_start(props, p)
@@ -378,6 +418,7 @@ function script_properties()
     obs.obs_properties_add_text(notifications_props, "stop_msg", "Stop Message", obs.OBS_TEXT_MULTILINE)
     obs.obs_properties_add_bool(notifications_props, "enable_start", "Stream Start")
     obs.obs_properties_add_bool(notifications_props, "enable_stop", "Stream Stop")
+    obs.obs_properties_add_bool(notifications_props, "enable_delete_start_msg", "Delete Start Message on Stop")
     obs.obs_properties_add_group(props, "notifications_group", "Notifications", obs.OBS_GROUP_NORMAL, notifications_props)
     
     local testing_props = obs.obs_properties_create()
@@ -415,6 +456,7 @@ function script_update(settings)
     
     config.enable_start = obs.obs_data_get_bool(settings, "enable_start")
     config.enable_stop = obs.obs_data_get_bool(settings, "enable_stop")
+    config.enable_delete_start_msg = obs.obs_data_get_bool(settings, "enable_delete_start_msg")
     
     local start_msg = obs.obs_data_get_string(settings, "start_msg")
     config.start_msg = start_msg ~= "" and start_msg or DEFAULTS.start_msg
