@@ -14,39 +14,64 @@ local TG_CONFIG_STATUS = {
     NOT_VALIDATED = "⚪ Not Validated"
 }
 
+local EMOJI = {
+    SUCCESS = "✅",
+    ERROR = "❌",
+    START = "🔴",
+    STOP = "⚫"
+}
+
 local TG_BOT_STATUS = {
-    CONNECTED = "✅ Bot Connected: @",
-    INVALID_TOKEN = "❌ Invalid Bot Token",
-    INVALID_RESPONSE = "❌ Invalid Response",
-    NETWORK_ERROR = "❌ Network Error"
+    CONNECTED = EMOJI.SUCCESS .. " Bot Connected: @",
+    INVALID_TOKEN = EMOJI.ERROR .. " Invalid Bot Token",
+    INVALID_RESPONSE = EMOJI.ERROR .. " Invalid Response",
+    NETWORK_ERROR = EMOJI.ERROR .. " Network Error"
 }
 
 local TG_CHAT_STATUS = {
-    FOUND = " | ✅ Chat: ",
-    DM = " | ✅ Chat: Direct Message",
-    NOT_FOUND = " | ❌ Chat Not Found",
-    ERROR = " | ❌ Chat Error"
+    FOUND = " | " .. EMOJI.SUCCESS .. " Chat: ",
+    DM = " | " .. EMOJI.SUCCESS .. " Chat: Direct Message",
+    NOT_FOUND = " | " .. EMOJI.ERROR .. " Chat Not Found",
+    ERROR = " | " .. EMOJI.ERROR .. " Chat Error"
+}
+
+local TG_DEFAULTS = {
+    bot_token = "",
+    chat_id = ""
+}
+
+local TWITCH_DEFAULTS = {
+    client_id = "",
+    client_secret = "",
+    channel_name = ""
+}
+
+local DEFAULTS = {
+    enable_start = false,
+    enable_stop = false,
+    start_msg = EMOJI.START .. " Stream Started!",
+    stop_msg = EMOJI.STOP .. " Stream Ended",
+    enable_delete_start_msg = false
 }
 
 local tg_config = {
-    bot_token = "",
-    chat_id = "",
+    bot_token = TG_DEFAULTS.bot_token,
+    chat_id = TG_DEFAULTS.chat_id,
     status = TG_CONFIG_STATUS.NOT_CONFIGURED
 }
 
 local config = {
-    enable_start = true,
-    enable_stop = true,
-    start_template = "🔴 Stream Started!",
-    stop_template = "⚫ Stream Ended",
-    enable_delete_start_msg = false,
-    debug_mode = false
+    enable_start = DEFAULTS.enable_start,
+    enable_stop = DEFAULTS.enable_stop,
+    start_msg = DEFAULTS.start_msg,
+    stop_msg = DEFAULTS.stop_msg,
+    enable_delete_start_msg = DEFAULTS.enable_delete_start_msg
 }
 
 local twitch_config = {
-    client_id = "",
-    client_secret = "",
-    channel_name = "",
+    client_id = TWITCH_DEFAULTS.client_id,
+    client_secret = TWITCH_DEFAULTS.client_secret,
+    channel_name = TWITCH_DEFAULTS.channel_name,
     oauth_token = nil,
     token_expires_at = nil,
     status = TG_CONFIG_STATUS.NOT_CONFIGURED
@@ -280,30 +305,46 @@ Send Telegram notifications when your stream starts and stops.<br>
 <i>Configure your Telegram bot credentials and message templates below.</i>]]
 end
 
-function stream_start()
+function notify_stream_start()
     if tg_config.bot_token == "" or tg_config.chat_id == "" then
         return
     end
     
-    tg_send_msg(config.start_template)
+    tg_send_msg(config.start_msg)
 end
 
-function stream_stop()
+function notify_stream_stop()
     if tg_config.bot_token == "" or tg_config.chat_id == "" then
         return
     end
-    
-    tg_send_msg(config.stop_template)
+
+    tg_send_msg(config.stop_msg)
 end
 
 function test_stream_start(props, p)
-    on_event(obs.OBS_FRONTEND_EVENT_STREAMING_STARTED)
+    notify_stream_start()
     return true
 end
 
 function test_stream_stop(props, p)
-    on_event(obs.OBS_FRONTEND_EVENT_STREAMING_STOPPED)
+    notify_stream_stop()
     return true
+end
+
+function stream_start()
+    if not config.enable_start then
+        return
+    end
+    
+    notify_stream_start()
+end
+
+function stream_stop()
+    if not config.enable_stop then
+        return
+    end
+
+    notify_stream_stop()
 end
 
 function tg_validate_config_callback(props, prop)
@@ -332,6 +373,13 @@ function script_properties()
     obs.obs_property_set_description(tg_config_status_prop, tg_config.status)
     obs.obs_properties_add_group(props, "tg_config_group", "Telegram", obs.OBS_GROUP_NORMAL, tg_config_props)
     
+    local notifications_props = obs.obs_properties_create()
+    obs.obs_properties_add_text(notifications_props, "start_msg", "Start Message", obs.OBS_TEXT_MULTILINE)
+    obs.obs_properties_add_text(notifications_props, "stop_msg", "Stop Message", obs.OBS_TEXT_MULTILINE)
+    obs.obs_properties_add_bool(notifications_props, "enable_start", "Stream Start")
+    obs.obs_properties_add_bool(notifications_props, "enable_stop", "Stream Stop")
+    obs.obs_properties_add_group(props, "notifications_group", "Notifications", obs.OBS_GROUP_NORMAL, notifications_props)
+    
     local testing_props = obs.obs_properties_create()
     obs.obs_properties_add_button(testing_props, "btn_test_start", "Test Stream Start", test_stream_start)
     obs.obs_properties_add_button(testing_props, "btn_test_stop", "Test Stream Stop", test_stream_stop)
@@ -341,17 +389,16 @@ function script_properties()
 end
 
 function script_defaults(settings)
-    obs.obs_data_set_default_bool(settings, "enable_start", true)
-    obs.obs_data_set_default_bool(settings, "enable_stop", true)
-    obs.obs_data_set_default_string(settings, "start_template", "🔴 Stream Started!")
-    obs.obs_data_set_default_string(settings, "stop_template", "⚫ Stream Ended")
-    obs.obs_data_set_default_bool(settings, "enable_delete_start_msg", false)
-    obs.obs_data_set_default_bool(settings, "debug_mode", false)
-    obs.obs_data_set_default_string(settings, "tg_bot_token", "")
-    obs.obs_data_set_default_string(settings, "tg_chat_id", "")
-    obs.obs_data_set_default_string(settings, "twitch_client_id", "")
-    obs.obs_data_set_default_string(settings, "twitch_client_secret", "")
-    obs.obs_data_set_default_string(settings, "twitch_channel_name", "")
+    obs.obs_data_set_default_bool(settings, "enable_start", DEFAULTS.enable_start)
+    obs.obs_data_set_default_bool(settings, "enable_stop", DEFAULTS.enable_stop)
+    obs.obs_data_set_default_string(settings, "start_msg", DEFAULTS.start_msg)
+    obs.obs_data_set_default_string(settings, "stop_msg", DEFAULTS.stop_msg)
+    obs.obs_data_set_default_bool(settings, "enable_delete_start_msg", DEFAULTS.enable_delete_start_msg)
+    obs.obs_data_set_default_string(settings, "tg_bot_token", TG_DEFAULTS.bot_token)
+    obs.obs_data_set_default_string(settings, "tg_chat_id", TG_DEFAULTS.chat_id)
+    obs.obs_data_set_default_string(settings, "twitch_client_id", TWITCH_DEFAULTS.client_id)
+    obs.obs_data_set_default_string(settings, "twitch_client_secret", TWITCH_DEFAULTS.client_secret)
+    obs.obs_data_set_default_string(settings, "twitch_channel_name", TWITCH_DEFAULTS.channel_name)
 end
 
 function on_event(event)
@@ -366,10 +413,19 @@ function script_update(settings)
     tg_config.bot_token = obs.obs_data_get_string(settings, "tg_bot_token")
     tg_config.chat_id = obs.obs_data_get_string(settings, "tg_chat_id")
     
+    config.enable_start = obs.obs_data_get_bool(settings, "enable_start")
+    config.enable_stop = obs.obs_data_get_bool(settings, "enable_stop")
+    
+    local start_msg = obs.obs_data_get_string(settings, "start_msg")
+    config.start_msg = start_msg ~= "" and start_msg or DEFAULTS.start_msg
+    
+    local stop_msg = obs.obs_data_get_string(settings, "stop_msg")
+    config.stop_msg = stop_msg ~= "" and stop_msg or DEFAULTS.stop_msg
+    
     if tg_config.bot_token == "" and tg_config.chat_id == "" then
         tg_config.status = TG_CONFIG_STATUS.NOT_CONFIGURED
     elseif tg_config.bot_token ~= "" or tg_config.chat_id ~= "" then
-        if not tg_config.status:find("✅") and not tg_config.status:find("❌") then
+        if not tg_config.status:find(EMOJI.SUCCESS) and not tg_config.status:find(EMOJI.ERROR) then
             tg_config.status = TG_CONFIG_STATUS.NOT_VALIDATED
         end
     end
