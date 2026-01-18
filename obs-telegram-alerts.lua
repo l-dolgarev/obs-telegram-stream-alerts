@@ -8,10 +8,6 @@ obs = obslua
 
 VERSION = "1.0.0"
 
--- ============================================================================
--- CONFIGURATION TABLES
--- ============================================================================
-
 local tg_config = {
     bot_token = "",
     chat_id = "",
@@ -37,10 +33,6 @@ local twitch_config = {
     status = "⚪ Not Configured"
 }
 
--- ============================================================================
--- OBS INTEGRATION LAYER
--- ============================================================================
-
 function script_description()
     return [[<b>OBS Telegram Stream Alerts</b> v]] .. VERSION .. [[<br>
 <br>
@@ -49,8 +41,32 @@ Send Telegram notifications when your stream starts and stops.<br>
 <i>Configure your Telegram bot credentials and message templates below.</i>]]
 end
 
+function stream_start()
+    obs.script_log(obs.LOG_ERROR, "Streaming started")
+end
+
+function stream_stop()
+    obs.script_log(obs.LOG_ERROR, "Streaming stopped")
+end
+
+function test_stream_start(props, p)
+    on_event(obs.OBS_FRONTEND_EVENT_STREAMING_STARTED)
+    return true
+end
+
+function test_stream_stop(props, p)
+    on_event(obs.OBS_FRONTEND_EVENT_STREAMING_STOPPED)
+    return true
+end
+
 function script_properties()
     local props = obs.obs_properties_create()
+    
+    local testing_props = obs.obs_properties_create()
+    obs.obs_properties_add_button(testing_props, "btn_test_start", "Test Stream Start", test_stream_start)
+    obs.obs_properties_add_button(testing_props, "btn_test_stop", "Test Stream Stop", test_stream_stop)
+    obs.obs_properties_add_group(props, "testing_group", "Testing", obs.OBS_GROUP_NORMAL, testing_props)
+    
     return props
 end
 
@@ -70,9 +86,9 @@ end
 
 function on_event(event)
     if event == obs.OBS_FRONTEND_EVENT_STREAMING_STARTED then
-        obs.script_log(obs.LOG_ERROR, "Streaming started")
+        stream_start()
     elseif event == obs.OBS_FRONTEND_EVENT_STREAMING_STOPPED then
-        obs.script_log(obs.LOG_ERROR, "Streaming stopped")
+        stream_stop()
     end
 end
 
