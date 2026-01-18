@@ -62,6 +62,11 @@ end
 function script_properties()
     local props = obs.obs_properties_create()
     
+    local tg_props = obs.obs_properties_create()
+    obs.obs_properties_add_text(tg_props, "bot_token", "Bot Token", obs.OBS_TEXT_PASSWORD)
+    obs.obs_properties_add_text(tg_props, "chat_id", "Chat ID", obs.OBS_TEXT_DEFAULT)
+    obs.obs_properties_add_group(props, "tg_group", "Telegram", obs.OBS_GROUP_NORMAL, tg_props)
+    
     local testing_props = obs.obs_properties_create()
     obs.obs_properties_add_button(testing_props, "btn_test_start", "Test Stream Start", test_stream_start)
     obs.obs_properties_add_button(testing_props, "btn_test_stop", "Test Stream Stop", test_stream_stop)
@@ -90,6 +95,11 @@ function on_event(event)
     elseif event == obs.OBS_FRONTEND_EVENT_STREAMING_STOPPED then
         stream_stop()
     end
+end
+
+function script_update(settings)
+    tg_config.bot_token = obs.obs_data_get_string(settings, "bot_token")
+    tg_config.chat_id = obs.obs_data_get_string(settings, "chat_id")
 end
 
 function script_load(settings)
