@@ -8,6 +8,8 @@ obs = obslua
 
 VERSION = "1.0.0"
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
+TWITCH_OAUTH_URL = "https://id.twitch.tv/oauth2/token"
+TWITCH_HELIX_API = "https://api.twitch.tv/helix"
 
 local EMOJI = {
     SUCCESS = "✅",
@@ -52,10 +54,12 @@ local TWITCH_DEFAULTS = {
 }
 
 local DEFAULTS = {
+    start_msg = EMOJI.ONLINE .. " <i>Stream started:</i> {stream_title}\nNow playing <b>{category}</b>",
+    stop_msg = EMOJI.OFFLINE .. " <i>Stream offline:</i> {stream_title}\nThanks to all <code>{viewer_count}</code> viewers for watching!",
+    start_delay = 0,
+    preview_url = "",
     enable_start = false,
     enable_stop = false,
-    start_msg = EMOJI.ONLINE .. " Stream Started!",
-    stop_msg = EMOJI.OFFLINE .. " Stream Ended",
     enable_delete_start_msg = false
 }
 
@@ -66,12 +70,14 @@ local tg_config = {
 }
 
 local config = {
-    enable_start = DEFAULTS.enable_start,
-    enable_stop = DEFAULTS.enable_stop,
     start_msg = DEFAULTS.start_msg,
     stop_msg = DEFAULTS.stop_msg,
-    enable_delete_start_msg = DEFAULTS.enable_delete_start_msg,
-    start_msg_id = nil
+    start_msg_id = nil,
+    start_delay = DEFAULTS.start_delay,
+    preview_url = DEFAULTS.preview_url,
+    enable_start = DEFAULTS.enable_start,
+    enable_stop = DEFAULTS.enable_stop,
+    enable_delete_start_msg = DEFAULTS.enable_delete_start_msg
 }
 
 local twitch_config = {
@@ -93,6 +99,17 @@ function url_encode(str)
     str = str:gsub("([^%w%-%.%_%~])", function(c)
         return string.format("%%%02X", string.byte(c))
     end)
+    return str
+end
+
+function escape_html(str)
+    if not str then return "" end
+    str = tostring(str)
+    str = str:gsub("&", "&amp;")
+    str = str:gsub("<", "&lt;")
+    str = str:gsub(">", "&gt;")
+    str = str:gsub('"', "&quot;")
+    str = str:gsub("'", "&#39;")
     return str
 end
 
@@ -258,6 +275,37 @@ function tg_validate_chat_id()
     return true
 end
 
+function substitute_placeholders(template, metadata)
+    if not template then return "" end
+    
+    if not metadata then
+        template = template:gsub("{stream_title}", "")
+        template = template:gsub("{category}", "")
+        template = template:gsub("{viewer_count}", "")
+        return template
+    end
+    
+    if metadata.stream_title then
+        template = template:gsub("{stream_title}", escape_html(metadata.stream_title))
+    else
+        template = template:gsub("{stream_title}", "")
+    end
+    
+    if metadata.category then
+        template = template:gsub("{category}", escape_html(metadata.category))
+    else
+        template = template:gsub("{category}", "")
+    end
+    
+    if metadata.viewer_count then
+        template = template:gsub("{viewer_count}", tostring(metadata.viewer_count))
+    else
+        template = template:gsub("{viewer_count}", "")
+    end
+    
+    return template
+end
+
 function tg_send_msg(text)
     if tg_config.bot_token == "" or tg_config.chat_id == "" then
         obs.script_log(obs.LOG_ERROR, "Telegram credentials not configured")
@@ -303,6 +351,52 @@ function tg_send_msg(text)
     return false, nil
 end
 
+function tg_send_photo(photo_url, caption)
+    if tg_config.bot_token == "" or tg_config.chat_id == "" then
+        obs.script_log(obs.LOG_ERROR, "Telegram credentials not configured")
+        return false, nil
+    end
+    
+    local url = TELEGRAM_API_BASE .. tg_config.bot_token .. "/sendPhoto"
+    local body = {
+        chat_id = tg_config.chat_id,
+        photo = photo_url,
+        caption = caption,
+        parse_mode = "HTML"
+    }
+    
+    local response = http_post(url, body)
+    
+    if response.status == 200 then
+        local msg_id = response.body:match('"message_id":(%d+)')
+        return true, msg_id
+    end
+    
+    if response.status == 401 then
+        obs.script_log(obs.LOG_ERROR, "Telegram API error (401): Unauthorized")
+        return false, nil
+    end
+    
+    if response.status == 400 then
+        local description = response.body:match('"description":"([^"]+)"') or "Bad Request"
+        obs.script_log(obs.LOG_ERROR, "Telegram API error (400): " .. description)
+        return false, nil
+    end
+    
+    if response.status == 429 then
+        obs.script_log(obs.LOG_ERROR, "Telegram API error (429): Rate limit exceeded")
+        return false, nil
+    end
+    
+    if response.status == 0 then
+        obs.script_log(obs.LOG_ERROR, "Failed to send Telegram photo: network timeout or DNS failure")
+        return false, nil
+    end
+    
+    obs.script_log(obs.LOG_ERROR, "Telegram API error (" .. response.status .. "): Unknown error")
+    return false, nil
+end
+
 function tg_delete_msg(message_id)
     if not message_id or message_id == "" then
         return false
@@ -335,14 +429,13 @@ function get_twitch_oauth_token()
         return nil, "Credentials not configured"
     end
     
-    local url = "https://id.twitch.tv/oauth2/token"
     local body = {
         client_id = twitch_config.client_id,
         client_secret = twitch_config.client_secret,
         grant_type = "client_credentials"
     }
     
-    local response = http_post(url, body)
+    local response = http_post(TWITCH_OAUTH_URL, body)
     
     if response.status == 401 or response.status == 400 then
         obs.script_log(obs.LOG_ERROR, "Twitch OAuth failed: Invalid credentials")
@@ -375,7 +468,7 @@ function get_twitch_stream_status(oauth_token)
         return nil, "Channel name not configured"
     end
     
-    local url = "https://api.twitch.tv/helix/streams?user_login=" .. url_encode(twitch_config.channel_name)
+    local url = TWITCH_HELIX_API .. "/streams?user_login=" .. url_encode(twitch_config.channel_name)
     local platform = detect_platform()
     local is_windows = platform == "windows"
     local q = is_windows and '"' or "'"
@@ -440,6 +533,177 @@ function get_twitch_stream_status(oauth_token)
     return "offline", nil
 end
 
+function get_twitch_live_metadata(oauth_token)
+    local url = TWITCH_HELIX_API .. "/streams?user_login=" .. url_encode(twitch_config.channel_name)
+    local platform = detect_platform()
+    local is_windows = platform == "windows"
+    local q = is_windows and '"' or "'"
+    
+    local cmd = "curl -s --max-time 30"
+    cmd = cmd .. " -H " .. q .. "Authorization: Bearer " .. oauth_token .. q
+    cmd = cmd .. " -H " .. q .. "Client-ID: " .. twitch_config.client_id .. q
+    cmd = cmd .. " -w " .. q .. "\\n%{http_code}" .. q
+    cmd = cmd .. " " .. q .. url .. q
+    
+    local handle = io.popen(cmd)
+    if not handle then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch live stream data: Unable to execute curl")
+        return nil
+    end
+    
+    local output = handle:read("*a")
+    handle:close()
+    
+    local response = parse_curl_response(output)
+    
+    if response.status ~= 200 then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch live stream data: HTTP " .. response.status)
+        return nil
+    end
+    
+    local data_empty = response.body:match('"data":%[%]')
+    if data_empty then
+        return nil
+    end
+    
+    local title = response.body:match('"title":"([^"]+)"')
+    local game_name = response.body:match('"game_name":"([^"]+)"')
+    local viewer_count = response.body:match('"viewer_count":(%d+)')
+    local thumbnail_url = response.body:match('"thumbnail_url":"([^"]+)"')
+    
+    if not title then
+        return nil
+    end
+    
+    local metadata = {
+        stream_title = title,
+        category = game_name or "Unknown",
+        viewer_count = viewer_count or "0"
+    }
+    
+    if thumbnail_url then
+        metadata.preview_url = thumbnail_url:gsub("{width}", "1920"):gsub("{height}", "1080")
+    end
+    
+    return metadata
+end
+
+function get_twitch_user_id(oauth_token)
+    local url = TWITCH_HELIX_API .. "/users?login=" .. url_encode(twitch_config.channel_name)
+    local platform = detect_platform()
+    local is_windows = platform == "windows"
+    local q = is_windows and '"' or "'"
+    
+    local cmd = "curl -s --max-time 30"
+    cmd = cmd .. " -H " .. q .. "Authorization: Bearer " .. oauth_token .. q
+    cmd = cmd .. " -H " .. q .. "Client-ID: " .. twitch_config.client_id .. q
+    cmd = cmd .. " -w " .. q .. "\\n%{http_code}" .. q
+    cmd = cmd .. " " .. q .. url .. q
+    
+    local handle = io.popen(cmd)
+    if not handle then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch user ID: Unable to execute curl")
+        return nil
+    end
+    
+    local output = handle:read("*a")
+    handle:close()
+    
+    local response = parse_curl_response(output)
+    
+    if response.status ~= 200 then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch user ID: HTTP " .. response.status)
+        return nil
+    end
+    
+    local user_id = response.body:match('"id":"([^"]+)"')
+    if not user_id then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch user ID: Unable to parse response")
+        return nil
+    end
+    
+    return user_id
+end
+
+function get_twitch_channel_by_id(oauth_token, user_id)
+    local url = TWITCH_HELIX_API .. "/channels?broadcaster_id=" .. url_encode(user_id)
+    local platform = detect_platform()
+    local is_windows = platform == "windows"
+    local q = is_windows and '"' or "'"
+    
+    local cmd = "curl -s --max-time 30"
+    cmd = cmd .. " -H " .. q .. "Authorization: Bearer " .. oauth_token .. q
+    cmd = cmd .. " -H " .. q .. "Client-ID: " .. twitch_config.client_id .. q
+    cmd = cmd .. " -w " .. q .. "\\n%{http_code}" .. q
+    cmd = cmd .. " " .. q .. url .. q
+    
+    local handle = io.popen(cmd)
+    if not handle then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch channel data: Unable to execute curl")
+        return nil
+    end
+    
+    local output = handle:read("*a")
+    handle:close()
+    
+    local response = parse_curl_response(output)
+    
+    if response.status ~= 200 then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch channel data: HTTP " .. response.status)
+        return nil
+    end
+    
+    local title = response.body:match('"title":"([^"]+)"')
+    local game_name = response.body:match('"game_name":"([^"]+)"')
+    
+    if not title then
+        obs.script_log(obs.LOG_ERROR, "Failed to fetch channel data: Unable to parse response")
+        return nil
+    end
+    
+    return {
+        stream_title = title,
+        category = game_name or "Unknown",
+        viewer_count = "0"
+    }
+end
+
+function get_twitch_channel_info(oauth_token)
+    local user_id = get_twitch_user_id(oauth_token)
+    if not user_id then
+        return nil
+    end
+    
+    return get_twitch_channel_by_id(oauth_token, user_id)
+end
+
+function get_twitch_metadata()
+    if twitch_config.client_id == "" or twitch_config.client_secret == "" or twitch_config.channel_name == "" then
+        return nil
+    end
+    
+    local oauth_token = twitch_config.oauth_token
+    
+    if not oauth_token or not twitch_config.token_expires_at or os.time() >= twitch_config.token_expires_at then
+        local new_token, expires_in = get_twitch_oauth_token()
+        if not new_token then
+            obs.script_log(obs.LOG_ERROR, "Failed to fetch Twitch metadata: OAuth token unavailable")
+            return nil
+        end
+        
+        oauth_token = new_token
+        twitch_config.oauth_token = new_token
+        twitch_config.token_expires_at = os.time() + tonumber(expires_in or 5184000)
+    end
+    
+    local metadata = get_twitch_live_metadata(oauth_token)
+    if metadata then
+        return metadata
+    end
+    
+    return get_twitch_channel_info(oauth_token)
+end
+
 function script_description()
     return [[<b>OBS Telegram Stream Alerts</b> v]] .. VERSION .. [[<br>
 <br>
@@ -453,7 +717,23 @@ function notify_stream_start()
         return
     end
     
-    local success, message_id = tg_send_msg(config.start_msg)
+    local metadata = get_twitch_metadata()
+    local message = substitute_placeholders(config.start_msg, metadata)
+    local preview_url = nil
+    
+    if metadata and metadata.preview_url then
+        preview_url = metadata.preview_url
+    elseif config.preview_url ~= "" then
+        preview_url = config.preview_url
+    end
+    
+    local success, message_id
+    
+    if preview_url then
+        success, message_id = tg_send_photo(preview_url, message)
+    else
+        success, message_id = tg_send_msg(message)
+    end
     
     if success and message_id then
         config.start_msg_id = message_id
@@ -464,8 +744,22 @@ function notify_stream_stop()
     if tg_config.bot_token == "" or tg_config.chat_id == "" then
         return
     end
-
-    tg_send_msg(config.stop_msg)
+    
+    local metadata = get_twitch_metadata()
+    local message = substitute_placeholders(config.stop_msg, metadata)
+    local preview_url = nil
+    
+    if metadata and metadata.preview_url then
+        preview_url = metadata.preview_url
+    elseif config.preview_url ~= "" then
+        preview_url = config.preview_url
+    end
+    
+    if preview_url then
+        tg_send_photo(preview_url, message)
+    else
+        tg_send_msg(message)
+    end
     
     if config.enable_delete_start_msg and config.start_msg_id and config.start_msg_id ~= "" then
         tg_delete_msg(config.start_msg_id)
@@ -488,7 +782,16 @@ function stream_start()
         return
     end
     
-    notify_stream_start()
+    local delay_ms = config.start_delay * 1000
+    
+    if delay_ms == 0 then
+        notify_stream_start()
+    else
+        obs.timer_add(function()
+            obs.remove_current_callback()
+            notify_stream_start()
+        end, delay_ms)
+    end
 end
 
 function stream_stop()
@@ -572,6 +875,8 @@ function script_properties()
     local notifications_props = obs.obs_properties_create()
     obs.obs_properties_add_text(notifications_props, "start_msg", "Start Message", obs.OBS_TEXT_MULTILINE)
     obs.obs_properties_add_text(notifications_props, "stop_msg", "Stop Message", obs.OBS_TEXT_MULTILINE)
+    obs.obs_properties_add_int(notifications_props, "start_delay", "Start Notification Delay (sec)", 0, 300, 1)
+    obs.obs_properties_add_text(notifications_props, "preview_url", "Preview URL", obs.OBS_TEXT_DEFAULT)
     obs.obs_properties_add_bool(notifications_props, "enable_start", "Stream Start")
     obs.obs_properties_add_bool(notifications_props, "enable_stop", "Stream Stop")
     obs.obs_properties_add_bool(notifications_props, "enable_delete_start_msg", "Delete Start Message on Stop")
@@ -600,7 +905,9 @@ function script_defaults(settings)
     obs.obs_data_set_default_bool(settings, "enable_stop", DEFAULTS.enable_stop)
     obs.obs_data_set_default_string(settings, "start_msg", DEFAULTS.start_msg)
     obs.obs_data_set_default_string(settings, "stop_msg", DEFAULTS.stop_msg)
+    obs.obs_data_set_default_int(settings, "start_delay", DEFAULTS.start_delay)
     obs.obs_data_set_default_bool(settings, "enable_delete_start_msg", DEFAULTS.enable_delete_start_msg)
+    obs.obs_data_set_default_string(settings, "preview_url", DEFAULTS.preview_url)
     obs.obs_data_set_default_string(settings, "tg_bot_token", TG_DEFAULTS.bot_token)
     obs.obs_data_set_default_string(settings, "tg_chat_id", TG_DEFAULTS.chat_id)
     obs.obs_data_set_default_string(settings, "twitch_client_id", TWITCH_DEFAULTS.client_id)
@@ -623,32 +930,18 @@ function script_update(settings)
     config.enable_start = obs.obs_data_get_bool(settings, "enable_start")
     config.enable_stop = obs.obs_data_get_bool(settings, "enable_stop")
     config.enable_delete_start_msg = obs.obs_data_get_bool(settings, "enable_delete_start_msg")
+    config.start_msg = obs.obs_data_get_string(settings, "start_msg")
+    config.stop_msg = obs.obs_data_get_string(settings, "stop_msg")
+    config.start_delay = obs.obs_data_get_int(settings, "start_delay")
+    config.preview_url = obs.obs_data_get_string(settings, "preview_url")
     
-    local start_msg = obs.obs_data_get_string(settings, "start_msg")
-    config.start_msg = start_msg ~= "" and start_msg or DEFAULTS.start_msg
-    
-    local stop_msg = obs.obs_data_get_string(settings, "stop_msg")
-    config.stop_msg = stop_msg ~= "" and stop_msg or DEFAULTS.stop_msg
-    
-    if tg_config.bot_token == "" and tg_config.chat_id == "" then
-        tg_config.status = TG_STATUS.NOT_CONFIGURED
-    elseif tg_config.bot_token ~= "" or tg_config.chat_id ~= "" then
-        if not tg_config.status:find(EMOJI.SUCCESS) and not tg_config.status:find(EMOJI.ERROR) then
-            tg_config.status = TG_STATUS.NOT_VALIDATED
-        end
-    end
+    tg_config.status = (tg_config.bot_token == "" and tg_config.chat_id == "") and TG_STATUS.NOT_CONFIGURED or TG_STATUS.NOT_VALIDATED
     
     twitch_config.client_id = obs.obs_data_get_string(settings, "twitch_client_id")
     twitch_config.client_secret = obs.obs_data_get_string(settings, "twitch_client_secret")
     twitch_config.channel_name = obs.obs_data_get_string(settings, "twitch_channel_name")
     
-    if twitch_config.client_id == "" and twitch_config.client_secret == "" and twitch_config.channel_name == "" then
-        twitch_config.status = TWITCH_STATUS.NOT_CONFIGURED
-    elseif twitch_config.client_id ~= "" or twitch_config.client_secret ~= "" or twitch_config.channel_name ~= "" then
-        if not twitch_config.status:find(EMOJI.SUCCESS) and not twitch_config.status:find(EMOJI.ERROR) then
-            twitch_config.status = TWITCH_STATUS.NOT_VALIDATED
-        end
-    end
+    twitch_config.status = (twitch_config.client_id == "" and twitch_config.client_secret == "" and twitch_config.channel_name == "") and TWITCH_STATUS.NOT_CONFIGURED or TWITCH_STATUS.NOT_VALIDATED
 end
 
 function script_load(settings)
