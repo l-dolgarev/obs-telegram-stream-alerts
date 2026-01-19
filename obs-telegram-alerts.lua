@@ -9,33 +9,35 @@ obs = obslua
 VERSION = "1.0.0"
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 
-local TG_CONFIG_STATUS = {
-    NOT_CONFIGURED = "⚪ Not Configured",
-    NOT_VALIDATED = "⚪ Not Validated"
-}
-
 local EMOJI = {
     SUCCESS = "✅",
     ERROR = "❌",
     WARNING = "⚠️",
-    START = "🔴",
-    STOP = "⚫"
+    ONLINE = "🔴",
+    OFFLINE = "⚪"
 }
 
-local TG_BOT_STATUS = {
-    CONNECTED = EMOJI.SUCCESS .. " Bot Connected: @",
-    INVALID_TOKEN = EMOJI.ERROR .. " Invalid Bot Token",
-    INVALID_RESPONSE = EMOJI.ERROR .. " Invalid Response",
-    NETWORK_ERROR = EMOJI.ERROR .. " Network Error",
-    RATE_LIMITED = EMOJI.WARNING .. " Rate Limited"
+local TG_STATUS = {
+    NOT_CONFIGURED = EMOJI.OFFLINE .. " Not Configured",
+    NOT_VALIDATED = EMOJI.OFFLINE .. " Not Validated",
+    BOT_CONNECTED = EMOJI.SUCCESS .. " Bot Connected: @",
+    BOT_INVALID_TOKEN = EMOJI.ERROR .. " Invalid Bot Token",
+    BOT_INVALID_RESPONSE = EMOJI.ERROR .. " Invalid Response",
+    BOT_NETWORK_ERROR = EMOJI.ERROR .. " Network Error",
+    BOT_RATE_LIMITED = EMOJI.WARNING .. " Rate Limited",
+    CHAT_FOUND = " | " .. EMOJI.SUCCESS .. " Chat: ",
+    CHAT_DM = " | " .. EMOJI.SUCCESS .. " Chat: Direct Message",
+    CHAT_NOT_FOUND = " | " .. EMOJI.ERROR .. " Chat Not Found",
+    CHAT_ERROR = " | " .. EMOJI.ERROR .. " Chat Error",
+    CHAT_RATE_LIMITED = " | " .. EMOJI.WARNING .. " Rate Limited"
 }
 
-local TG_CHAT_STATUS = {
-    FOUND = " | " .. EMOJI.SUCCESS .. " Chat: ",
-    DM = " | " .. EMOJI.SUCCESS .. " Chat: Direct Message",
-    NOT_FOUND = " | " .. EMOJI.ERROR .. " Chat Not Found",
-    ERROR = " | " .. EMOJI.ERROR .. " Chat Error",
-    RATE_LIMITED = " | " .. EMOJI.WARNING .. " Rate Limited"
+local TWITCH_STATUS = {
+    NOT_CONFIGURED = EMOJI.OFFLINE .. " Not Configured",
+    NOT_VALIDATED = EMOJI.OFFLINE .. " Not Validated",
+    CONNECTED = EMOJI.SUCCESS .. " Connected: ",
+    AUTH_FAILED = EMOJI.ERROR .. " Auth Failed: ",
+    CHANNEL_OFFLINE = EMOJI.OFFLINE .. " Channel Offline"
 }
 
 local TG_DEFAULTS = {
@@ -52,15 +54,15 @@ local TWITCH_DEFAULTS = {
 local DEFAULTS = {
     enable_start = false,
     enable_stop = false,
-    start_msg = EMOJI.START .. " Stream Started!",
-    stop_msg = EMOJI.STOP .. " Stream Ended",
+    start_msg = EMOJI.ONLINE .. " Stream Started!",
+    stop_msg = EMOJI.OFFLINE .. " Stream Ended",
     enable_delete_start_msg = false
 }
 
 local tg_config = {
     bot_token = TG_DEFAULTS.bot_token,
     chat_id = TG_DEFAULTS.chat_id,
-    status = TG_CONFIG_STATUS.NOT_CONFIGURED
+    status = TG_STATUS.NOT_CONFIGURED
 }
 
 local config = {
@@ -78,7 +80,7 @@ local twitch_config = {
     channel_name = TWITCH_DEFAULTS.channel_name,
     oauth_token = nil,
     token_expires_at = nil,
-    status = TG_CONFIG_STATUS.NOT_CONFIGURED
+    status = TWITCH_STATUS.NOT_CONFIGURED
 }
 
 function detect_platform()
@@ -184,7 +186,7 @@ end
 
 function tg_validate_bot_token()
     if tg_config.bot_token == "" then
-        tg_config.status = TG_CONFIG_STATUS.NOT_CONFIGURED
+        tg_config.status = TG_STATUS.NOT_CONFIGURED
         return false
     end
     
@@ -192,31 +194,31 @@ function tg_validate_bot_token()
     local response = http_get(url)
     
     if response.status == 401 or response.status == 404 then
-        tg_config.status = TG_BOT_STATUS.INVALID_TOKEN
+        tg_config.status = TG_STATUS.BOT_INVALID_TOKEN
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Invalid bot token")
         return false
     end
     
     if response.status == 429 then
-        tg_config.status = TG_BOT_STATUS.RATE_LIMITED
+        tg_config.status = TG_STATUS.BOT_RATE_LIMITED
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Rate limited - wait before retrying")
         return false
     end
     
     if response.status ~= 200 then
-        tg_config.status = TG_BOT_STATUS.NETWORK_ERROR
+        tg_config.status = TG_STATUS.BOT_NETWORK_ERROR
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Network error (status " .. response.status .. ")")
         return false
     end
     
     local username = response.body:match('"username":"([^"]+)"')
     if not username then
-        tg_config.status = TG_BOT_STATUS.INVALID_RESPONSE
+        tg_config.status = TG_STATUS.BOT_INVALID_RESPONSE
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Unable to parse bot username")
         return false
     end
     
-    tg_config.status = TG_BOT_STATUS.CONNECTED .. username
+    tg_config.status = TG_STATUS.BOT_CONNECTED .. username
     return true
 end
 
@@ -229,28 +231,28 @@ function tg_validate_chat_id()
     local response = http_get(url)
     
     if response.status == 400 or response.status == 404 then
-        tg_config.status = tg_config.status .. TG_CHAT_STATUS.NOT_FOUND
+        tg_config.status = tg_config.status .. TG_STATUS.CHAT_NOT_FOUND
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Chat not found")
         return false
     end
     
     if response.status == 429 then
-        tg_config.status = tg_config.status .. TG_CHAT_STATUS.RATE_LIMITED
+        tg_config.status = tg_config.status .. TG_STATUS.CHAT_RATE_LIMITED
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Rate limited - wait before retrying")
         return false
     end
     
     if response.status ~= 200 then
-        tg_config.status = tg_config.status .. TG_CHAT_STATUS.ERROR
+        tg_config.status = tg_config.status .. TG_STATUS.CHAT_ERROR
         obs.script_log(obs.LOG_ERROR, "Telegram validation failed: Network error (status " .. response.status .. ")")
         return false
     end
     
     local title = response.body:match('"title":"([^"]+)"')
     if title then
-        tg_config.status = tg_config.status .. TG_CHAT_STATUS.FOUND .. title
+        tg_config.status = tg_config.status .. TG_STATUS.CHAT_FOUND .. title
     else
-        tg_config.status = tg_config.status .. TG_CHAT_STATUS.DM
+        tg_config.status = tg_config.status .. TG_STATUS.CHAT_DM
     end
     
     return true
@@ -328,6 +330,116 @@ function tg_delete_msg(message_id)
     return false
 end
 
+function get_twitch_oauth_token()
+    if twitch_config.client_id == "" or twitch_config.client_secret == "" then
+        return nil, "Credentials not configured"
+    end
+    
+    local url = "https://id.twitch.tv/oauth2/token"
+    local body = {
+        client_id = twitch_config.client_id,
+        client_secret = twitch_config.client_secret,
+        grant_type = "client_credentials"
+    }
+    
+    local response = http_post(url, body)
+    
+    if response.status == 401 or response.status == 400 then
+        obs.script_log(obs.LOG_ERROR, "Twitch OAuth failed: Invalid credentials")
+        return nil, "Invalid credentials"
+    end
+    
+    if response.status == 0 then
+        obs.script_log(obs.LOG_ERROR, "Twitch OAuth failed: Network error")
+        return nil, "Network error"
+    end
+    
+    if response.status ~= 200 then
+        obs.script_log(obs.LOG_ERROR, "Twitch OAuth failed: HTTP " .. response.status)
+        return nil, "HTTP " .. response.status
+    end
+    
+    local access_token = response.body:match('"access_token":"([^"]+)"')
+    local expires_in = response.body:match('"expires_in":(%d+)')
+    
+    if not access_token then
+        obs.script_log(obs.LOG_ERROR, "Twitch OAuth failed: Unable to parse token")
+        return nil, "Invalid response"
+    end
+    
+    return access_token, expires_in
+end
+
+function get_twitch_stream_status(oauth_token)
+    if twitch_config.channel_name == "" then
+        return nil, "Channel name not configured"
+    end
+    
+    local url = "https://api.twitch.tv/helix/streams?user_login=" .. url_encode(twitch_config.channel_name)
+    local platform = detect_platform()
+    local is_windows = platform == "windows"
+    local q = is_windows and '"' or "'"
+    
+    local cmd = "curl -s --max-time 30"
+    cmd = cmd .. " -H " .. q .. "Authorization: Bearer " .. oauth_token .. q
+    cmd = cmd .. " -H " .. q .. "Client-ID: " .. twitch_config.client_id .. q
+    cmd = cmd .. " -w " .. q .. "\\n%{http_code}" .. q
+    cmd = cmd .. " " .. q .. url .. q
+    
+    local handle = io.popen(cmd)
+    if not handle then
+        obs.script_log(obs.LOG_ERROR, "Twitch stream status failed: Unable to execute curl")
+        return nil, "Unable to execute curl"
+    end
+    
+    local output = handle:read("*a")
+    handle:close()
+    
+    local response = parse_curl_response(output)
+    
+    if response.status == 401 then
+        obs.script_log(obs.LOG_ERROR, "Twitch stream status failed: Invalid token")
+        return nil, "Invalid token"
+    end
+    
+    if response.status == 404 then
+        obs.script_log(obs.LOG_ERROR, "Twitch channel not found: " .. twitch_config.channel_name)
+        return nil, "Channel not found"
+    end
+    
+    if response.status == 0 then
+        obs.script_log(obs.LOG_ERROR, "Twitch stream status failed: Network error")
+        return nil, "Network error"
+    end
+    
+    if response.status ~= 200 then
+        obs.script_log(obs.LOG_ERROR, "Twitch stream status failed: HTTP " .. response.status)
+        return nil, "HTTP " .. response.status
+    end
+    
+    local data_empty = response.body:match('"data":%[%]')
+    if data_empty then
+        return "offline", nil
+    end
+    
+    local user_login = response.body:match('"user_login":"([^"]+)"')
+    local game_name = response.body:match('"game_name":"([^"]+)"')
+    local title = response.body:match('"title":"([^"]+)"')
+    local viewer_count = response.body:match('"viewer_count":(%d+)')
+    
+    if user_login then
+        local metadata = {
+            user_login = user_login,
+            game_name = game_name or "Unknown",
+            title = title or "Untitled",
+            viewer_count = viewer_count or "0"
+        }
+        return "live", metadata
+    end
+    
+    return "offline", nil
+end
+
 function script_description()
     return [[<b>OBS Telegram Stream Alerts</b> v]] .. VERSION .. [[<br>
 <br>
@@ -389,7 +501,7 @@ end
 
 function tg_validate_config_callback(props, prop)
     tg_validate_bot_token()
-    if tg_config.bot_token ~= "" and tg_config.status:find(TG_BOT_STATUS.CONNECTED, 1, true) then
+    if tg_config.bot_token ~= "" and tg_config.status:find(TG_STATUS.BOT_CONNECTED, 1, true) then
         tg_validate_chat_id()
     end
     
@@ -401,17 +513,61 @@ function tg_validate_config_callback(props, prop)
     return true
 end
 
+function validate_twitch_config_callback(props, prop)
+    if twitch_config.client_id == "" or twitch_config.client_secret == "" or twitch_config.channel_name == "" then
+        twitch_config.status = TWITCH_STATUS.NOT_CONFIGURED
+        local status_prop = obs.obs_properties_get(props, "twitch_status_display")
+        if status_prop then
+            obs.obs_property_set_description(status_prop, twitch_config.status)
+        end
+        return true
+    end
+    
+    local oauth_token, err = get_twitch_oauth_token()
+    if not oauth_token then
+        twitch_config.status = TWITCH_STATUS.AUTH_FAILED .. err
+        local status_prop = obs.obs_properties_get(props, "twitch_status_display")
+        if status_prop then
+            obs.obs_property_set_description(status_prop, twitch_config.status)
+        end
+        return true
+    end
+    
+    local stream_status, metadata = get_twitch_stream_status(oauth_token)
+    if not stream_status then
+        twitch_config.status = TWITCH_STATUS.AUTH_FAILED .. metadata
+        local status_prop = obs.obs_properties_get(props, "twitch_status_display")
+        if status_prop then
+            obs.obs_property_set_description(status_prop, twitch_config.status)
+        end
+        return true
+    end
+    
+    if stream_status == "offline" then
+        twitch_config.status = TWITCH_STATUS.CHANNEL_OFFLINE
+    elseif stream_status == "live" and metadata then
+        twitch_config.status = TWITCH_STATUS.CONNECTED .. twitch_config.channel_name
+    end
+    
+    local status_prop = obs.obs_properties_get(props, "twitch_status_display")
+    if status_prop then
+        obs.obs_property_set_description(status_prop, twitch_config.status)
+    end
+    
+    return true
+end
+
 function script_properties()
     local props = obs.obs_properties_create()
     
-    local tg_config_props = obs.obs_properties_create()
-    obs.obs_properties_add_text(tg_config_props, "tg_bot_token", "Bot Token", obs.OBS_TEXT_PASSWORD)
-    obs.obs_properties_add_text(tg_config_props, "tg_chat_id", "Chat ID", obs.OBS_TEXT_DEFAULT)
-    obs.obs_properties_add_button(tg_config_props, "btn_tg_config_validate", "Validate", tg_validate_config_callback)
-    local tg_config_status_prop = obs.obs_properties_add_text(tg_config_props, "tg_config_status", "Status", obs.OBS_TEXT_INFO)
-    obs.obs_property_set_enabled(tg_config_status_prop, false)
-    obs.obs_property_set_description(tg_config_status_prop, tg_config.status)
-    obs.obs_properties_add_group(props, "tg_config_group", "Telegram", obs.OBS_GROUP_NORMAL, tg_config_props)
+    local tg_props = obs.obs_properties_create()
+    obs.obs_properties_add_text(tg_props, "tg_bot_token", "Bot Token", obs.OBS_TEXT_PASSWORD)
+    obs.obs_properties_add_text(tg_props, "tg_chat_id", "Chat ID", obs.OBS_TEXT_DEFAULT)
+    obs.obs_properties_add_button(tg_props, "btn_tg_config_validate", "Validate", tg_validate_config_callback)
+    local tg_status_prop = obs.obs_properties_add_text(tg_props, "tg_config_status", "Status", obs.OBS_TEXT_INFO)
+    obs.obs_property_set_enabled(tg_status_prop, false)
+    obs.obs_property_set_description(tg_status_prop, tg_config.status)
+    obs.obs_properties_add_group(props, "tg_config_group", "Telegram", obs.OBS_GROUP_NORMAL, tg_props)
     
     local notifications_props = obs.obs_properties_create()
     obs.obs_properties_add_text(notifications_props, "start_msg", "Start Message", obs.OBS_TEXT_MULTILINE)
@@ -425,6 +581,10 @@ function script_properties()
     obs.obs_properties_add_text(twitch_props, "twitch_client_id", "Client ID", obs.OBS_TEXT_DEFAULT)
     obs.obs_properties_add_text(twitch_props, "twitch_client_secret", "Client Secret", obs.OBS_TEXT_PASSWORD)
     obs.obs_properties_add_text(twitch_props, "twitch_channel_name", "Channel Name", obs.OBS_TEXT_DEFAULT)
+    obs.obs_properties_add_button(twitch_props, "btn_validate_twitch", "Validate", validate_twitch_config_callback)
+    local twitch_status_prop = obs.obs_properties_add_text(twitch_props, "twitch_status_display", "Status", obs.OBS_TEXT_INFO)
+    obs.obs_property_set_enabled(twitch_status_prop, false)
+    obs.obs_property_set_description(twitch_status_prop, twitch_config.status)
     obs.obs_properties_add_group(props, "twitch_group", "Twitch (optional)", obs.OBS_GROUP_NORMAL, twitch_props)
     
     local testing_props = obs.obs_properties_create()
@@ -471,10 +631,10 @@ function script_update(settings)
     config.stop_msg = stop_msg ~= "" and stop_msg or DEFAULTS.stop_msg
     
     if tg_config.bot_token == "" and tg_config.chat_id == "" then
-        tg_config.status = TG_CONFIG_STATUS.NOT_CONFIGURED
+        tg_config.status = TG_STATUS.NOT_CONFIGURED
     elseif tg_config.bot_token ~= "" or tg_config.chat_id ~= "" then
         if not tg_config.status:find(EMOJI.SUCCESS) and not tg_config.status:find(EMOJI.ERROR) then
-            tg_config.status = TG_CONFIG_STATUS.NOT_VALIDATED
+            tg_config.status = TG_STATUS.NOT_VALIDATED
         end
     end
     
@@ -482,10 +642,12 @@ function script_update(settings)
     twitch_config.client_secret = obs.obs_data_get_string(settings, "twitch_client_secret")
     twitch_config.channel_name = obs.obs_data_get_string(settings, "twitch_channel_name")
     
-    if twitch_config.client_id ~= "" and twitch_config.client_secret ~= "" and twitch_config.channel_name ~= "" then
-        twitch_config.status = TG_CONFIG_STATUS.NOT_VALIDATED
-    else
-        twitch_config.status = TG_CONFIG_STATUS.NOT_CONFIGURED
+    if twitch_config.client_id == "" and twitch_config.client_secret == "" and twitch_config.channel_name == "" then
+        twitch_config.status = TWITCH_STATUS.NOT_CONFIGURED
+    elseif twitch_config.client_id ~= "" or twitch_config.client_secret ~= "" or twitch_config.channel_name ~= "" then
+        if not twitch_config.status:find(EMOJI.SUCCESS) and not twitch_config.status:find(EMOJI.ERROR) then
+            twitch_config.status = TWITCH_STATUS.NOT_VALIDATED
+        end
     end
 end
 
