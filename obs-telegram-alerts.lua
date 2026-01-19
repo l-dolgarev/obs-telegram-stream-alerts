@@ -421,6 +421,12 @@ function script_properties()
     obs.obs_properties_add_bool(notifications_props, "enable_delete_start_msg", "Delete Start Message on Stop")
     obs.obs_properties_add_group(props, "notifications_group", "Notifications", obs.OBS_GROUP_NORMAL, notifications_props)
     
+    local twitch_props = obs.obs_properties_create()
+    obs.obs_properties_add_text(twitch_props, "twitch_client_id", "Client ID", obs.OBS_TEXT_DEFAULT)
+    obs.obs_properties_add_text(twitch_props, "twitch_client_secret", "Client Secret", obs.OBS_TEXT_PASSWORD)
+    obs.obs_properties_add_text(twitch_props, "twitch_channel_name", "Channel Name", obs.OBS_TEXT_DEFAULT)
+    obs.obs_properties_add_group(props, "twitch_group", "Twitch (optional)", obs.OBS_GROUP_NORMAL, twitch_props)
+    
     local testing_props = obs.obs_properties_create()
     obs.obs_properties_add_button(testing_props, "btn_test_start", "Test Stream Start", test_stream_start)
     obs.obs_properties_add_button(testing_props, "btn_test_stop", "Test Stream Stop", test_stream_stop)
@@ -470,6 +476,16 @@ function script_update(settings)
         if not tg_config.status:find(EMOJI.SUCCESS) and not tg_config.status:find(EMOJI.ERROR) then
             tg_config.status = TG_CONFIG_STATUS.NOT_VALIDATED
         end
+    end
+    
+    twitch_config.client_id = obs.obs_data_get_string(settings, "twitch_client_id")
+    twitch_config.client_secret = obs.obs_data_get_string(settings, "twitch_client_secret")
+    twitch_config.channel_name = obs.obs_data_get_string(settings, "twitch_channel_name")
+    
+    if twitch_config.client_id ~= "" and twitch_config.client_secret ~= "" and twitch_config.channel_name ~= "" then
+        twitch_config.status = TG_CONFIG_STATUS.NOT_VALIDATED
+    else
+        twitch_config.status = TG_CONFIG_STATUS.NOT_CONFIGURED
     end
 end
 
